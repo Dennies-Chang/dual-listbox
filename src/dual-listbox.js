@@ -20,9 +20,11 @@ const DIRECTION_DOWN = "down";
  */
 class DualListbox {
     constructor(selector, options = {}) {
+        this.debug = false;
         this.setDefaults();
         this.dragged = null;
         this.options = [];
+        this.selectionOrder = []; // Track order of selection
 
         if (DualListbox.isDomElement(selector)) {
             this.select = selector;
@@ -71,6 +73,8 @@ class DualListbox {
 
         this.showSortButtons = false;
         this.sortFunction = (a, b) => {
+            if (this.debug) {console.log(a, b);}
+
             if (a.selected) {
                 return -1;
             }
@@ -93,15 +97,48 @@ class DualListbox {
     }
 
     changeOrder(liItem, newPosition) {
-        console.log(liItem);
+        if (this.debug) {console.log(liItem);}
         const index = this.options.findIndex((option) => {
-            console.log(option, liItem.dataset.id);
+            if (this.debug) {console.log(option, liItem.dataset.id);}
             return option.value === liItem.dataset.id;
         });
-        console.log(index);
+        if (this.debug) {console.log(index);}
         const cutOptions = this.options.splice(index, 1);
-        console.log(cutOptions);
+        if (this.debug) {console.log(cutOptions);}
         this.options.splice(newPosition, 0, cutOptions[0]);
+
+        if (liItem.parentElement.matches('.dual-listbox__selected')) {
+            const orderIndex = this.selectionOrder.indexOf(liItem.dataset.id);
+            const cutSelectOrder = this.selectionOrder.splice(orderIndex, 1);
+            this.selectionOrder.splice(newPosition, 0, cutSelectOrder[0]);
+        }
+    }
+
+    _addItem(event) {
+        const selectedItems = Array.from(this.availableList.querySelectorAll(`.${SELECTED_MODIFIER}`));
+
+        selectedItems.forEach(item => {
+            this.selectedList.appendChild(item);
+            item.classList.remove(SELECTED_MODIFIER);
+
+            // Track the order of selection
+            this.selectionOrder.push(item.dataset.value); // Assume each item has a unique data-value attribute
+        });
+
+        this._sortSelectedList();
+    }
+
+    _sortSelectedList() {
+        const items = Array.from(this.selectedList.children);
+
+        items.sort((a, b) => {
+            const indexA = this.selectionOrder.indexOf(a.dataset.value);
+            const indexB = this.selectionOrder.indexOf(b.dataset.value);
+            return indexA - indexB;
+        });
+
+        // Append items in sorted order
+        items.forEach(item => this.selectedList.appendChild(item));
     }
 
     addOptions(options) {
@@ -134,11 +171,20 @@ class DualListbox {
      * @param {NodeElement} listItem
      */
     changeSelected(listItem) {
-        const changeOption = this.options.find(
+        let changeOption = this.options.find(
             (option) => option.value === listItem.dataset.id
         );
         changeOption.selected = !changeOption.selected;
+
+        if (changeOption.selected) {
+            this.selectionOrder.push(listItem.dataset.id);
+        }
+        else {
+            this.selectionOrder = this.selectionOrder.filter(x => x !== listItem.dataset.id);
+        }
+
         this.redraw();
+        if (this.debug) {console.log('selectionOrder : ', this.selectionOrder);}
 
         setTimeout(() => {
             let event = document.createEvent("HTMLEvents");
@@ -174,8 +220,6 @@ class DualListbox {
      * Redraws the Dual listbox content
      */
     redraw() {
-        this.options.sort(this.sortFunction);
-
         this.updateAvailableListbox();
         this.updateSelectedListbox();
         this.syncSelect();
@@ -230,15 +274,37 @@ class DualListbox {
             this.select.removeChild(this.select.lastChild);
         }
 
-        this.options.forEach((option) => {
-            let optionElement = document.createElement("option");
-            optionElement.value = option.value;
-            optionElement.innerText = option.text;
-            if (option.selected) {
-                optionElement.setAttribute("selected", "selected");
+        this.selectionOrder.forEach((itemValue) => {
+            let found = false;
+            let idx = 0;
+            while (!found && (idx < this.options.length)) {
+                let theOption = this.options[idx];
+
+                if (itemValue == theOption.value) {
+                    let optionElement = document.createElement("option");
+                    optionElement.value = theOption.value;
+                    optionElement.innerText = theOption.text;
+                    if (theOption.selected) {
+                        optionElement.setAttribute("selected", "selected");
+                    }
+                    this.select.appendChild(optionElement);
+                }
+
+                idx++;
             }
-            this.select.appendChild(optionElement);
         });
+
+        this.options.forEach((option) => {
+            if (!option.selected) {
+                let optionElement = document.createElement("option");
+                optionElement.value = option.value;
+                optionElement.innerText = option.text;
+
+                this.select.appendChild(optionElement);
+            }
+        });
+
+        if (this.debug) { console.log("selection: ", this.select); }
     }
 
     //
@@ -251,13 +317,30 @@ class DualListbox {
      * Update the elements in the listbox;
      */
     _updateListbox(list, options) {
+        let selectedValue = [];
         while (list.firstChild) {
+            if (list.firstChild.matches('.dual-listbox__item--selected')) {
+                selectedValue.push(list.firstChild.dataset.id);
+            }
             list.removeChild(list.firstChild);
         }
 
-        options.forEach((option) => {
-            list.appendChild(this._createListItem(option));
-        });
+        console.log("existing selected valus(s): ", selectedValue);
+        if (list == this.selectedList) {
+            this.selectionOrder.forEach((itemValue) => {
+                options.forEach((option) => {
+                    if (itemValue == option.value) {
+                        list.appendChild(this._createListItem(option, (selectedValue.indexOf(itemValue) > -1)));
+                    }
+                });
+            });
+
+        }
+        else {
+            options.forEach((option) => {
+                list.appendChild(this._createListItem(option));
+            });
+        }
     }
 
     /**
@@ -466,7 +549,7 @@ class DualListbox {
      * @Private
      * Creates the listItem out of the option.
      */
-    _createListItem(option) {
+    _createListItem(option, selectedStatus = false) {
         let listItem = document.createElement("li");
 
         listItem.classList.add(ITEM_ELEMENT);
@@ -480,13 +563,17 @@ class DualListbox {
             listItem.setAttribute("draggable", "true");
         }
 
+        if (selectedStatus) {
+            listItem.classList.add('dual-listbox__item--selected');
+        }
+
         return listItem;
     }
 
     _liListeners(li) {
         li.addEventListener("dragstart", (event) => {
             // store a ref. on the dragged elem
-            console.log("drag start", event);
+            if (this.debug) {console.log("drag start", event);}
             this.dragged = event.currentTarget;
             event.currentTarget.classList.add("dragging");
         });
@@ -516,12 +603,21 @@ class DualListbox {
             event.preventDefault();
             event.stopPropagation();
             event.target.classList.remove("drop-above");
-            let newIndex = this.options.findIndex(
-                (option) => option.value === event.target.dataset.id
-            );
+
+            let newIndex = -1;
+            if (event.target.parentElement.matches('.dual-listbox__selected')) {
+                newIndex = this.selectionOrder.indexOf(event.target.dataset.id);
+            }
+            else {
+                newIndex = this.options.findIndex(
+                    (option) => option.value === event.target.dataset.id
+                );
+            }
+
             if (event.target.parentElement === this.dragged.parentElement) {
                 this.changeOrder(this.dragged, newIndex);
                 this.redraw();
+                if (this.debug) {console.log("selectionOrder: ", this.selectionOrder);}
             } else {
                 this.changeSelected(this.dragged);
                 this.changeOrder(this.dragged, newIndex);
@@ -712,21 +808,14 @@ class DualListbox {
      * @return {int[]}
      */
     _getNewIndex(selected, direction) {
-        const oldIndex = this.options.findIndex(
-            (option) => option.value === selected.dataset.id
-        );
+        const oldIndex = this.selectionOrder.indexOf(selected.dataset.id);
 
-        let newIndex = oldIndex;
-        if (DIRECTION_UP === direction) {
-            newIndex -= 1;
-        } else if (
-            DIRECTION_DOWN === direction &&
-            oldIndex < selected.length - 1
-        ) {
-            newIndex += 1;
+        if (direction === DIRECTION_UP) {
+            return oldIndex - 1;
         }
-
-        return newIndex;
+        else if ((direction === DIRECTION_DOWN) && (oldIndex < this.selectionOrder.length - 1)) {
+            return oldIndex + 1;
+        }
     }
 
     /**
